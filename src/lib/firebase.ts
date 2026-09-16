@@ -58,6 +58,8 @@ export const db = app ? getFirestore(app) : null;
 
 const LOCAL_SUBMISSIONS_KEY = 'dm-aluminium-contact-submissions';
 
+export const ADMIN_EMAIL = 'dmaluminium01@gmail.com';
+
 export function readLocalSubmissions(): SubmissionRecord[] {
   if (typeof window === 'undefined') return [];
 
@@ -296,135 +298,178 @@ export async function updateCustomerLeadPaymentStatus(
 ) {
   const updatedAt = new Date().toISOString();
 
-  if (!db) {
-    return false;
+  if (db) {
+    try {
+      const ref = doc(db, 'contact_submissions', id);
+
+      await withFirebaseTimeout(
+        updateDoc(ref, {
+          ...details,
+          updated_at: updatedAt,
+        }),
+      );
+
+      return true;
+    } catch {
+      void 0;
+    }
   }
 
-  try {
-    const ref = doc(db, 'contact_submissions', id);
+  const items = readLocalSubmissions();
 
-    await withFirebaseTimeout(
-      updateDoc(ref, {
-        ...details,
-        updated_at: updatedAt,
-      }),
-    );
+  const updated = items.map((item) =>
+    item.id === id
+      ? { ...item, ...details, updated_at: updatedAt }
+      : item,
+  );
 
-    return true;
-  } catch {
-    return false;
-  }
+  writeLocalSubmissions(updated);
+
+  return true;
 }
 
 export async function deleteCustomerLead(id: string) {
   const deletedAt = new Date().toISOString();
 
-  if (!db) {
-    return false;
+  if (db) {
+    try {
+      await withFirebaseTimeout(
+        updateDoc(
+          doc(db, 'contact_submissions', id),
+          {
+            deleted_at: deletedAt,
+            updated_at: deletedAt,
+          },
+        ),
+      );
+
+      return true;
+    } catch {
+      void 0;
+    }
   }
 
-  try {
-    await withFirebaseTimeout(
-      updateDoc(
-        doc(db, 'contact_submissions', id),
-        {
-          deleted_at: deletedAt,
-          updated_at: deletedAt,
-        },
-      ),
-    );
+  const items = readLocalSubmissions();
 
-    return true;
-  } catch {
-    return false;
-  }
+  const updated = items.map((item) =>
+    item.id === id
+      ? { ...item, deleted_at: deletedAt, updated_at: deletedAt }
+      : item,
+  );
+
+  writeLocalSubmissions(updated);
+
+  return true;
 }
 
 export async function restoreCustomerLead(id: string) {
-  if (!db) {
-    return false;
+  const updatedAt = new Date().toISOString();
+
+  if (db) {
+    try {
+      await withFirebaseTimeout(
+        updateDoc(
+          doc(db, 'contact_submissions', id),
+          {
+            deleted_at: null,
+            updated_at: updatedAt,
+          },
+        ),
+      );
+
+      return true;
+    } catch {
+      void 0;
+    }
   }
 
-  try {
-    await withFirebaseTimeout(
-      updateDoc(
-        doc(db, 'contact_submissions', id),
-        {
-          deleted_at: null,
-          updated_at: new Date().toISOString(),
-        },
-      ),
-    );
+  const items = readLocalSubmissions();
 
-    return true;
-  } catch {
-    return false;
-  }
+  const updated = items.map((item) =>
+    item.id === id
+      ? { ...item, deleted_at: undefined, updated_at: updatedAt }
+      : item,
+  );
+
+  writeLocalSubmissions(updated);
+
+  return true;
 }
 
 export async function permanentlyDeleteCustomerLead(id: string) {
-  if (!db) {
-    return false;
+  if (db) {
+    try {
+      await withFirebaseTimeout(
+        deleteDoc(
+          doc(db, 'contact_submissions', id),
+        ),
+      );
+
+      return true;
+    } catch {
+      void 0;
+    }
   }
 
-  try {
-    await withFirebaseTimeout(
-      deleteDoc(
-        doc(db, 'contact_submissions', id),
-      ),
-    );
+  const items = readLocalSubmissions();
+  writeLocalSubmissions(items.filter((item) => item.id !== id));
 
-    return true;
-  } catch {
-    return false;
-  }
+  return true;
 }
 export async function purgeOldDeletedCustomerLeads(
   maxAgeDays: number,
 ): Promise<number> {
   const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
 
-  if (!db) {
-    return 0;
-  }
-
-  try {
-    const snapshot = await withFirebaseTimeout(
-      getDocs(
-        query(
-          collection(db, 'contact_submissions'),
+  if (db) {
+    try {
+      const snapshot = await withFirebaseTimeout(
+        getDocs(
+          query(
+            collection(db, 'contact_submissions'),
+          ),
         ),
-      ),
-    );
-
-    const expired = snapshot.docs.filter((docSnap) => {
-      const data = docSnap.data() as Partial<SubmissionRecord>;
-      const deletedAt = data.deleted_at;
-
-      return (
-        !!deletedAt &&
-        new Date(deletedAt).getTime() <= cutoff
       );
-    });
 
-    await Promise.all(
-      expired.map((docSnap) =>
-        withFirebaseTimeout(
-          deleteDoc(
-            doc(
-              db,
-              'contact_submissions',
-              docSnap.id,
+      const expired = snapshot.docs.filter((docSnap) => {
+        const data = docSnap.data() as Partial<SubmissionRecord>;
+        const deletedAt = data.deleted_at;
+
+        return (
+          !!deletedAt &&
+          new Date(deletedAt).getTime() <= cutoff
+        );
+      });
+
+      await Promise.all(
+        expired.map((docSnap) =>
+          withFirebaseTimeout(
+            deleteDoc(
+              doc(
+                db,
+                'contact_submissions',
+                docSnap.id,
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
 
-    return expired.length;
-  } catch {
-    return 0;
+      return expired.length;
+    } catch {
+      void 0;
+    }
   }
+
+  const items = readLocalSubmissions();
+  const remaining = items.filter((item) => {
+    if (!item.deleted_at) return true;
+    return new Date(item.deleted_at).getTime() > cutoff;
+  });
+  const removed = items.length - remaining.length;
+  writeLocalSubmissions(remaining);
+
+  return removed;
 }
 
 export async function firebaseSignIn(
@@ -440,11 +485,16 @@ export async function firebaseSignIn(
   }
 
   try {
-    await signInWithEmailAndPassword(
+    const credential = await signInWithEmailAndPassword(
       auth,
       normalizedEmail,
       password,
     );
+
+    if (credential.user.email !== ADMIN_EMAIL) {
+      await firebaseAuthSignOut(auth);
+      return { error: 'Access denied. This account is not authorized for admin access.' };
+    }
 
     return { error: null };
   } catch {

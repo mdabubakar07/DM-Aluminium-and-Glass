@@ -62,11 +62,19 @@ const DAILY_BOOK_KEY = 'dm-aluminium-daily-payment-book';
 const LAST_DAY_KEY = 'dm-aluminium-last-ledger-day';
 
 function getTodayKey() {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function getDateKey(iso: string) {
-  return iso.slice(0, 10);
+  const date = new Date(iso);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export default function AdminDashboard() {
@@ -106,37 +114,41 @@ export default function AdminDashboard() {
     setError('');
 
     try {
-      let data = await fetchCustomerLeads();
+      const data = await fetchCustomerLeads();
       setAllSubmissions(data as Submission[]);
-
-      if (statusFilter !== 'all') {
-        data = data.filter((item) => item.status === statusFilter);
-      }
-      if (typeFilter !== 'all') {
-        data = data.filter((item) => item.project_type === typeFilter);
-      }
-
-      if (search.trim()) {
-        const q = search.toLowerCase();
-        data = data.filter(
-          (item) =>
-            item.name.toLowerCase().includes(q) ||
-            item.email.toLowerCase().includes(q) ||
-            (item.phone ?? '').includes(q),
-        );
-      }
-
-      setSubmissions(data as Submission[]);
     } catch {
       setError('Unable to load submissions.');
-      setSubmissions([]);
+      setAllSubmissions([]);
     }
     setLoading(false);
-  }, [statusFilter, typeFilter, search]);
+  }, []);
 
   useEffect(() => {
     void fetchSubmissions();
   }, [fetchSubmissions]);
+
+  useEffect(() => {
+    let data = allSubmissions;
+
+    if (statusFilter !== 'all') {
+      data = data.filter((item) => item.status === statusFilter);
+    }
+    if (typeFilter !== 'all') {
+      data = data.filter((item) => item.project_type === typeFilter);
+    }
+
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      data = data.filter(
+        (item) =>
+          item.name.toLowerCase().includes(q) ||
+          item.email.toLowerCase().includes(q) ||
+          (item.phone ?? '').includes(q),
+      );
+    }
+
+    setSubmissions(data);
+  }, [allSubmissions, statusFilter, typeFilter, search]);
 
   const fetchRecycleBin = useCallback(async () => {
     try {
@@ -162,7 +174,6 @@ export default function AdminDashboard() {
     try {
       await updateCustomerLeadStatus(id, newStatus);
       setSuccessMessage('Task status updated successfully.');
-      void fetchSubmissions();
     } catch {
       setAllSubmissions(previousSubmissions);
       setSubmissions(previousSubmissions);
@@ -355,6 +366,9 @@ export default function AdminDashboard() {
       }
 
       try {
+        if (!/^[0-9+\-*/.\s]+$/.test(calculatorExpression)) {
+          throw new Error('Invalid');
+        }
         const sanitizedExpression = calculatorExpression.replace(/×/g, '*').replace(/÷/g, '/');
         const result = Function(`"use strict"; return (${sanitizedExpression});`)();
         if (!Number.isFinite(result)) {

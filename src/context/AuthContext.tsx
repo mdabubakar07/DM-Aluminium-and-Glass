@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import {
+  ADMIN_EMAIL,
   auth,
   firebaseResetPassword,
   firebaseSignIn,
@@ -34,7 +35,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setSession(currentUser ? { user: currentUser } : { user: null });
-      setIsAdmin(Boolean(currentUser));
+      const isAdminUser = currentUser !== null && currentUser.email === ADMIN_EMAIL;
+      setIsAdmin(isAdminUser);
       setLoading(false);
     });
 
