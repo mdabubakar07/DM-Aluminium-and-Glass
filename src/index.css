@@ -1,0 +1,243 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', 'Roboto', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background-color: #47a3c9;
+  color: #08090a;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1d20;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #5c5e61;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #737679;
+}
+
+/* Reveal-on-scroll utility */
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.7s ease-out, transform 0.7s ease-out;
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reveal-delay-1 {
+  transition-delay: 0.15s;
+}
+
+.reveal-delay-2 {
+  transition-delay: 0.3s;
+}
+
+.reveal-delay-3 {
+  transition-delay: 0.45s;
+}
+
+.reveal-delay-4 {
+  transition-delay: 0.6s;
+}
+
+.reveal-delay-5 {
+  transition-delay: 0.75s;
+}
+
+/* 3D perspective utilities */
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.perspective-1200 {
+  perspective: 1200px;
+}
+
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+/* Glassmorphism panel */
+.glass-panel {
+  background: rgba(26, 29, 32, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Subtle floating animation for decorative elements */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+.dashboard-bismillah {
+  perspective: 1200px;
+}
+
+.dashboard-bismillah__surface {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: clamp(1.5rem, 4vw, 3.25rem) 1.25rem clamp(1.35rem, 3vw, 2.5rem);
+  border: 1px solid rgba(157, 218, 239, 0.28);
+  border-radius: 1.25rem;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.13), transparent 28%),
+    linear-gradient(112deg, #24292d 0%, #11191d 48%, #0a1114 100%);
+  box-shadow:
+    0 1.25rem 2.5rem rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1.5rem 2.5rem rgba(0, 0, 0, 0.2);
+  transform: rotateX(1.2deg) rotateY(-0.7deg);
+  transform-style: preserve-3d;
+  animation: bismillah-float 7s ease-in-out infinite;
+}
+
+.dashboard-bismillah__surface::before {
+  position: absolute;
+  z-index: -1;
+  inset: -70% 30% 10% -20%;
+  content: '';
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.14) 50%, transparent 65%);
+  transform: rotate(12deg);
+  animation: bismillah-shine 8s ease-in-out infinite;
+}
+
+.dashboard-bismillah__glow {
+  position: absolute;
+  z-index: -1;
+  top: -5rem;
+  left: 50%;
+  width: 18rem;
+  height: 10rem;
+  border-radius: 50%;
+  background: rgba(71, 163, 201, 0.16);
+  filter: blur(2.5rem);
+  transform: translateX(-50%);
+}
+
+.dashboard-bismillah__arabic {
+  color: #f5f7f6;
+  font-family: 'Noto Naskh Arabic', Georgia, serif;
+  font-size: clamp(2rem, 5vw, 4.1rem);
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.55), 0 0 1.5rem rgba(224, 246, 255, 0.16);
+  transform: translateZ(2rem);
+}
+
+.dashboard-bismillah__rule {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  margin: 0.65rem auto 0.45rem;
+  max-width: 29rem;
+}
+
+.dashboard-bismillah__rule span {
+  flex: 1;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(231, 240, 240, 0.8));
+}
+
+.dashboard-bismillah__rule span:last-child {
+  background: linear-gradient(90deg, rgba(231, 240, 240, 0.8), transparent);
+}
+
+.dashboard-bismillah__rule i {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-right: 2.25rem solid rgba(231, 240, 240, 0.8);
+}
+
+.dashboard-bismillah__english {
+  color: #f0f4f3;
+  font-size: clamp(0.85rem, 2vw, 1.35rem);
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-align: center;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.dashboard-calendar-button {
+  position: relative;
+  box-shadow: 0 0.35rem 0 #08090a, inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px) perspective(500px) rotateX(2deg);
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.dashboard-calendar-button:hover {
+  box-shadow: 0 0.18rem 0 #08090a, inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  transform: translateY(1px) perspective(500px) rotateX(0deg);
+}
+
+.dashboard-calendar-popover {
+  transform-origin: top right;
+  animation: calendar-pop 180ms ease-out;
+  box-shadow: 0 1rem 2rem rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+@keyframes calendar-pop {
+  from { opacity: 0; transform: perspective(500px) rotateX(-10deg) translateY(-0.35rem); }
+  to { opacity: 1; transform: perspective(500px) rotateX(0) translateY(0); }
+}
+
+@keyframes bismillah-float {
+  0%, 100% { transform: rotateX(1.2deg) rotateY(-0.7deg) translateY(0); }
+  50% { transform: rotateX(1.2deg) rotateY(0.7deg) translateY(-4px); }
+}
+
+@keyframes bismillah-shine {
+  0%, 25% { transform: translateX(-35%) rotate(12deg); opacity: 0; }
+  45%, 65% { opacity: 1; }
+  85%, 100% { transform: translateX(105%) rotate(12deg); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-float,
+  .dashboard-bismillah__surface,
+  .dashboard-bismillah__surface::before,
+  .dashboard-calendar-popover,
+  .animate-ping,
+  .animate-bounce,
+  .animate-shimmer {
+    animation: none !important;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
