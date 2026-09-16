@@ -3,15 +3,18 @@ import {
   LayoutDashboard, LogOut, Search, Filter, Phone, Mail,
   Clock, CheckCircle2, XCircle, PauseCircle, CircleDot,
   Inbox, TrendingUp, ArrowLeft, CalendarDays, Download, RotateCcw, Pencil, Trash2, Save, X,
+  Loader2,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import {
   deleteCustomerLead,
   fetchDeletedCustomerLeads,
   fetchCustomerLeads,
+  hasPendingOperations,
   permanentlyDeleteCustomerLead,
   purgeOldDeletedCustomerLeads,
   restoreCustomerLead,
+  syncPendingOperations,
   updateCustomerLeadDetails,
   updateCustomerLeadPaymentStatus,
   updateCustomerLeadStatus,
@@ -88,6 +91,8 @@ export default function AdminDashboard() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [pendingCount, setPendingCount] = useState(0);
+  const [syncing, setSyncing] = useState(false);
   const [recycleBin, setRecycleBin] = useState<Submission[]>([]);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<Submission | null>(null);
@@ -125,6 +130,28 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     void fetchSubmissions();
+  }, [fetchSubmissions]);
+
+  useEffect(() => {
+    setPendingCount(hasPendingOperations() ? 1 : 0);
+
+    const trySync = async () => {
+      if (!hasPendingOperations()) return;
+      setSyncing(true);
+      try {
+        const { synced, remaining } = await syncPendingOperations();
+        if (synced > 0) {
+          setSuccessMessage(`${synced} pending change(s) synced to Firestore.`);
+          void fetchSubmissions();
+        }
+        setPendingCount(remaining);
+      } catch {
+        void 0;
+      }
+      setSyncing(false);
+    };
+
+    void trySync();
   }, [fetchSubmissions]);
 
   useEffect(() => {
@@ -172,8 +199,13 @@ export default function AdminDashboard() {
     setUpdatingId(id);
 
     try {
-      await updateCustomerLeadStatus(id, newStatus);
-      setSuccessMessage('Task status updated successfully.');
+      const { persisted } = await updateCustomerLeadStatus(id, newStatus);
+      if (persisted) {
+        setSuccessMessage('Task status updated successfully.');
+      } else {
+        setPendingCount(1);
+        setSuccessMessage('Status saved locally. Will sync to Firestore when connection returns.');
+      }
     } catch {
       setAllSubmissions(previousSubmissions);
       setSubmissions(previousSubmissions);
@@ -193,8 +225,13 @@ export default function AdminDashboard() {
     setUpdatingId(id);
 
     try {
-      await updateCustomerLeadPaymentStatus(id, paymentStatus);
-      setSuccessMessage('Payment status updated successfully.');
+      const { persisted } = await updateCustomerLeadPaymentStatus(id, paymentStatus);
+      if (persisted) {
+        setSuccessMessage('Payment status updated successfully.');
+      } else {
+        setPendingCount(1);
+        setSuccessMessage('Payment status saved locally. Will sync to Firestore when connection returns.');
+      }
     } catch {
       setAllSubmissions(previousSubmissions);
       setSubmissions(previousSubmissions);
@@ -235,13 +272,18 @@ export default function AdminDashboard() {
         project_type: editForm.project_type || null,
         message: editForm.message.trim(),
       };
-      await updateCustomerLeadDetails(id, details);
+      const { persisted } = await updateCustomerLeadDetails(id, details);
       const updateDetails = (submission: Submission) =>
         submission.id === id ? { ...submission, ...details } : submission;
       setSubmissions((prev) => prev.map(updateDetails));
       setAllSubmissions((prev) => prev.map(updateDetails));
       cancelEditing();
-      setSuccessMessage('Customer task updated successfully.');
+      if (persisted) {
+        setSuccessMessage('Customer task updated successfully.');
+      } else {
+        setPendingCount(1);
+        setSuccessMessage('Edit saved locally. Will sync to Firestore when connection returns.');
+      }
     } catch {
       setError('Unable to update customer task.');
     }
@@ -251,12 +293,17 @@ export default function AdminDashboard() {
   const removeSubmission = async (submission: Submission) => {
     setUpdatingId(submission.id);
     try {
-      await deleteCustomerLead(submission.id);
+      const { persisted } = await deleteCustomerLead(submission.id);
       setSubmissions((prev) => prev.filter((item) => item.id !== submission.id));
       setAllSubmissions((prev) => prev.filter((item) => item.id !== submission.id));
       setRecycleBin((prev) => [{ ...submission, deleted_at: new Date().toISOString() }, ...prev]);
       setDeleteCandidate(null);
-      setSuccessMessage('Customer enquiry deleted.');
+      if (persisted) {
+        setSuccessMessage('Customer enquiry deleted.');
+      } else {
+        setPendingCount(1);
+        setSuccessMessage('Delete saved locally. Will sync to Firestore when connection returns.');
+      }
     } catch {
       setError('Unable to delete customer enquiry.');
     }
@@ -264,24 +311,39 @@ export default function AdminDashboard() {
   };
 
   const restoreSubmission = async (submission: Submission) => {
-    await restoreCustomerLead(submission.id);
+    const { persisted } = await restoreCustomerLead(submission.id);
     setRecycleBin((prev) => prev.filter((item) => item.id !== submission.id));
     await fetchSubmissions();
-    setSuccessMessage(`${submission.name} restored from the recycle bin.`);
+    if (persisted) {
+      setSuccessMessage(`${submission.name} restored from the recycle bin.`);
+    } else {
+      setPendingCount(1);
+      setSuccessMessage(`${submission.name} restored locally. Will sync to Firestore when connection returns.`);
+    }
   };
 
   const permanentlyDeleteSubmission = async (submission: Submission) => {
     if (!window.confirm(`Permanently delete ${submission.name}? This cannot be undone.`)) return;
-    await permanentlyDeleteCustomerLead(submission.id);
+    const { persisted } = await permanentlyDeleteCustomerLead(submission.id);
     setRecycleBin((prev) => prev.filter((item) => item.id !== submission.id));
-    setSuccessMessage(`${submission.name} permanently deleted.`);
+    if (persisted) {
+      setSuccessMessage(`${submission.name} permanently deleted.`);
+    } else {
+      setPendingCount(1);
+      setSuccessMessage(`${submission.name} removed locally. Will sync to Firestore when connection returns.`);
+    }
   };
 
   const cleanupRecycleBin = async (days: number) => {
     try {
-      const removed = await purgeOldDeletedCustomerLeads(days);
+      const { removed, persisted } = await purgeOldDeletedCustomerLeads(days);
       await fetchRecycleBin();
-      setSuccessMessage(`${removed} old deleted record(s) were removed from storage. ${days}-day retention applied.`);
+      if (persisted) {
+        setSuccessMessage(`${removed} old deleted record(s) were removed from storage. ${days}-day retention applied.`);
+      } else {
+        setPendingCount(1);
+        setSuccessMessage(`${removed} record(s) removed locally. Will sync to Firestore when connection returns.`);
+      }
     } catch {
       setError('Unable to clean old deleted records.');
     }
@@ -847,6 +909,22 @@ export default function AdminDashboard() {
             Export
           </button>
         </div>
+
+        {(pendingCount > 0 || syncing) && (
+          <div className="mb-6 flex items-center gap-3 rounded-lg border border-yellow-400/30 bg-yellow-500/10 p-3 text-sm text-yellow-200">
+            {syncing ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Syncing pending changes to Firestore...
+              </>
+            ) : (
+              <>
+                <Clock size={16} className="flex-shrink-0" />
+                {pendingCount} change(s) saved locally, waiting for Firestore connection to sync.
+              </>
+            )}
+          </div>
+        )}
 
         {error && (
           <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">

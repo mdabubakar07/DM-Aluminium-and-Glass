@@ -27,11 +27,14 @@ export type SubmissionRecord = {
   message: string;
   status: string;
   payment_status?: 'done' | 'pending';
-  deleted_at?: string;
+  deleted_at?: string | null;
   notification_status: string;
   created_at: string;
   updated_at?: string;
+  _pending_sync?: boolean;
 };
+
+export type MutationResult = { persisted: boolean };
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -56,9 +59,9 @@ export const firebaseEnabled = !!app;
 export const auth = app ? getAuth(app) : null;
 export const db = app ? getFirestore(app) : null;
 
-const LOCAL_SUBMISSIONS_KEY = 'dm-aluminium-contact-submissions';
-
 export const ADMIN_EMAIL = 'dmaluminium01@gmail.com';
+
+const LOCAL_SUBMISSIONS_KEY = 'dm-aluminium-contact-submissions';
 
 export function readLocalSubmissions(): SubmissionRecord[] {
   if (typeof window === 'undefined') return [];
@@ -93,7 +96,8 @@ function withFirebaseTimeout<T>(
     }),
   ]);
 }
- export async function saveCustomerLead(payload: {
+
+export async function saveCustomerLead(payload: {
   name: string;
   email: string;
   phone: string;
@@ -121,10 +125,17 @@ function withFirebaseTimeout<T>(
   writeLocalSubmissions(items);
 
   if (db) {
-    void setDoc(
-      doc(db, 'contact_submissions', entry.id),
-      entry,
-    ).catch(() => undefined);
+    try {
+      await withFirebaseTimeout(
+        setDoc(doc(db, 'contact_submissions', entry.id), entry),
+      );
+    } catch {
+      const local = readLocalSubmissions();
+      const marked = local.map((item) =>
+        item.id === entry.id ? { ...item, _pending_sync: true } : item,
+      );
+      writeLocalSubmissions(marked);
+    }
   }
 
   return entry;
@@ -140,7 +151,7 @@ export async function fetchCustomerLeads(): Promise<SubmissionRecord[]> {
 
       const snapshot = await withFirebaseTimeout(getDocs(q));
 
-      return snapshot.docs
+      const remote = snapshot.docs
         .map((docSnap) => ({
           id: docSnap.id,
           ...docSnap.data(),
@@ -148,6 +159,10 @@ export async function fetchCustomerLeads(): Promise<SubmissionRecord[]> {
         .filter(
           (item) => !(item as SubmissionRecord).deleted_at,
         ) as SubmissionRecord[];
+
+      mergePendingLocalIntoRemote(remote);
+
+      return remote;
     } catch {
       return readLocalSubmissions().filter(
         (item) => !item.deleted_at,
@@ -159,6 +174,7 @@ export async function fetchCustomerLeads(): Promise<SubmissionRecord[]> {
     (item) => !item.deleted_at,
   );
 }
+
 export async function fetchDeletedCustomerLeads(): Promise<SubmissionRecord[]> {
   const now = Date.now();
   const recycleLimit = 30 * 24 * 60 * 60 * 1000;
@@ -210,83 +226,82 @@ export async function fetchDeletedCustomerLeads(): Promise<SubmissionRecord[]> {
 export async function updateCustomerLeadStatus(
   id: string,
   status: string,
-) {
+): Promise<MutationResult> {
+  const updatedAt = new Date().toISOString();
+
   if (db) {
     try {
-      const ref = doc(db, 'contact_submissions', id);
-
       await withFirebaseTimeout(
-        updateDoc(ref, {
+        updateDoc(doc(db, 'contact_submissions', id), {
           status,
-          updated_at: new Date().toISOString(),
+          updated_at: updatedAt,
           notification_status: 'sent',
         }),
       );
 
-      return true;
-    } catch (error) {
-      void error;
+      clearPendingFlag(id);
+      return { persisted: true };
+    } catch {
+      void 0;
     }
   }
 
   const items = readLocalSubmissions();
-
   const updated = items.map((item) =>
     item.id === id
       ? {
           ...item,
           status,
-          updated_at: new Date().toISOString(),
+          updated_at: updatedAt,
           notification_status: 'sent',
+          _pending_sync: true,
         }
       : item,
   );
-
   writeLocalSubmissions(updated);
 
-  return true;
+  return { persisted: false };
 }
 
 export async function updateCustomerLeadPaymentStatus(
   id: string,
   paymentStatus: 'done' | 'pending',
-) {
+): Promise<MutationResult> {
+  const updatedAt = new Date().toISOString();
+
   if (db) {
     try {
-      const ref = doc(db, 'contact_submissions', id);
-
       await withFirebaseTimeout(
-        updateDoc(ref, {
+        updateDoc(doc(db, 'contact_submissions', id), {
           payment_status: paymentStatus,
-          updated_at: new Date().toISOString(),
+          updated_at: updatedAt,
         }),
       );
 
-      return true;
-    } catch (error) {
-      void error;
+      clearPendingFlag(id);
+      return { persisted: true };
+    } catch {
+      void 0;
     }
   }
 
   const items = readLocalSubmissions();
-
   const updated = items.map((item) =>
     item.id === id
       ? {
           ...item,
           payment_status: paymentStatus,
-          updated_at: new Date().toISOString(),
+          updated_at: updatedAt,
+          _pending_sync: true,
         }
       : item,
   );
-
   writeLocalSubmissions(updated);
 
-  return true;
+  return { persisted: false };
 }
 
-
- export async function updateCustomerLeadDetails(
+export async function updateCustomerLeadDetails(
   id: string,
   details: {
     name: string;
@@ -295,40 +310,37 @@ export async function updateCustomerLeadPaymentStatus(
     project_type: string | null;
     message: string;
   },
-) {
+): Promise<MutationResult> {
   const updatedAt = new Date().toISOString();
 
   if (db) {
     try {
-      const ref = doc(db, 'contact_submissions', id);
-
       await withFirebaseTimeout(
-        updateDoc(ref, {
+        updateDoc(doc(db, 'contact_submissions', id), {
           ...details,
           updated_at: updatedAt,
         }),
       );
 
-      return true;
+      clearPendingFlag(id);
+      return { persisted: true };
     } catch {
       void 0;
     }
   }
 
   const items = readLocalSubmissions();
-
   const updated = items.map((item) =>
     item.id === id
-      ? { ...item, ...details, updated_at: updatedAt }
+      ? { ...item, ...details, updated_at: updatedAt, _pending_sync: true }
       : item,
   );
-
   writeLocalSubmissions(updated);
 
-  return true;
+  return { persisted: false };
 }
 
-export async function deleteCustomerLead(id: string) {
+export async function deleteCustomerLead(id: string): Promise<MutationResult> {
   const deletedAt = new Date().toISOString();
 
   if (db) {
@@ -343,26 +355,25 @@ export async function deleteCustomerLead(id: string) {
         ),
       );
 
-      return true;
+      clearPendingFlag(id);
+      return { persisted: true };
     } catch {
       void 0;
     }
   }
 
   const items = readLocalSubmissions();
-
   const updated = items.map((item) =>
     item.id === id
-      ? { ...item, deleted_at: deletedAt, updated_at: deletedAt }
+      ? { ...item, deleted_at: deletedAt, updated_at: deletedAt, _pending_sync: true }
       : item,
   );
-
   writeLocalSubmissions(updated);
 
-  return true;
+  return { persisted: false };
 }
 
-export async function restoreCustomerLead(id: string) {
+export async function restoreCustomerLead(id: string): Promise<MutationResult> {
   const updatedAt = new Date().toISOString();
 
   if (db) {
@@ -377,35 +388,33 @@ export async function restoreCustomerLead(id: string) {
         ),
       );
 
-      return true;
+      clearPendingFlag(id);
+      return { persisted: true };
     } catch {
       void 0;
     }
   }
 
   const items = readLocalSubmissions();
-
   const updated = items.map((item) =>
     item.id === id
-      ? { ...item, deleted_at: undefined, updated_at: updatedAt }
+      ? { ...item, deleted_at: undefined, updated_at: updatedAt, _pending_sync: true }
       : item,
   );
-
   writeLocalSubmissions(updated);
 
-  return true;
+  return { persisted: false };
 }
 
-export async function permanentlyDeleteCustomerLead(id: string) {
+export async function permanentlyDeleteCustomerLead(id: string): Promise<MutationResult> {
   if (db) {
     try {
       await withFirebaseTimeout(
-        deleteDoc(
-          doc(db, 'contact_submissions', id),
-        ),
+        deleteDoc(doc(db, 'contact_submissions', id)),
       );
 
-      return true;
+      clearPendingFlag(id);
+      return { persisted: true };
     } catch {
       void 0;
     }
@@ -414,21 +423,18 @@ export async function permanentlyDeleteCustomerLead(id: string) {
   const items = readLocalSubmissions();
   writeLocalSubmissions(items.filter((item) => item.id !== id));
 
-  return true;
+  return { persisted: false };
 }
+
 export async function purgeOldDeletedCustomerLeads(
   maxAgeDays: number,
-): Promise<number> {
+): Promise<{ removed: number; persisted: boolean }> {
   const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
 
   if (db) {
     try {
       const snapshot = await withFirebaseTimeout(
-        getDocs(
-          query(
-            collection(db, 'contact_submissions'),
-          ),
-        ),
+        getDocs(query(collection(db, 'contact_submissions'))),
       );
 
       const expired = snapshot.docs.filter((docSnap) => {
@@ -444,18 +450,12 @@ export async function purgeOldDeletedCustomerLeads(
       await Promise.all(
         expired.map((docSnap) =>
           withFirebaseTimeout(
-            deleteDoc(
-              doc(
-                db,
-                'contact_submissions',
-                docSnap.id,
-              ),
-            ),
+            deleteDoc(doc(db, 'contact_submissions', docSnap.id)),
           ),
         ),
       );
 
-      return expired.length;
+      return { removed: expired.length, persisted: true };
     } catch {
       void 0;
     }
@@ -469,7 +469,85 @@ export async function purgeOldDeletedCustomerLeads(
   const removed = items.length - remaining.length;
   writeLocalSubmissions(remaining);
 
-  return removed;
+  return { removed, persisted: false };
+}
+
+export async function syncPendingOperations(): Promise<{ synced: number; remaining: number }> {
+  if (!db) return { synced: 0, remaining: 0 };
+
+  const items = readLocalSubmissions();
+  const pending = items.filter((item) => item._pending_sync);
+
+  if (pending.length === 0) return { synced: 0, remaining: 0 };
+
+  let synced = 0;
+
+  for (const item of pending) {
+    try {
+      const { _pending_sync, ...cleanRecord } = item;
+      void _pending_sync;
+
+      if (item.deleted_at === undefined && !items.find((x) => x.id === item.id && x.deleted_at)) {
+        const localCheck = readLocalSubmissions();
+        const stillExists = localCheck.find((x) => x.id === item.id);
+        if (!stillExists || stillExists.deleted_at) continue;
+
+        await withFirebaseTimeout(
+          setDoc(doc(db, 'contact_submissions', item.id), cleanRecord),
+        );
+      } else if (item.deleted_at) {
+        await withFirebaseTimeout(
+          updateDoc(doc(db, 'contact_submissions', item.id), {
+            deleted_at: item.deleted_at,
+            updated_at: item.updated_at ?? new Date().toISOString(),
+          }),
+        );
+      } else {
+        await withFirebaseTimeout(
+          setDoc(doc(db, 'contact_submissions', item.id), cleanRecord, { merge: true }),
+        );
+      }
+
+      clearPendingFlag(item.id);
+      synced++;
+    } catch {
+      void 0;
+    }
+  }
+
+  const remaining = readLocalSubmissions().filter((item) => item._pending_sync).length;
+
+  return { synced, remaining };
+}
+
+export function hasPendingOperations(): boolean {
+  return readLocalSubmissions().some((item) => item._pending_sync);
+}
+
+function clearPendingFlag(id: string) {
+  const items = readLocalSubmissions();
+  const updated = items.map((item) =>
+    item.id === id
+      ? { ...item, _pending_sync: undefined }
+      : item,
+  );
+  writeLocalSubmissions(updated);
+}
+
+function mergePendingLocalIntoRemote(remote: SubmissionRecord[]): void {
+  const local = readLocalSubmissions();
+  const pending = local.filter((item) => item._pending_sync);
+
+  if (pending.length === 0) return;
+
+  for (const pendingItem of pending) {
+    const remoteIndex = remote.findIndex((r) => r.id === pendingItem.id);
+    if (remoteIndex >= 0) {
+      remote[remoteIndex] = { ...remote[remoteIndex], ...pendingItem };
+    } else if (!pendingItem.deleted_at) {
+      remote.unshift(pendingItem);
+    }
+  }
 }
 
 export async function firebaseSignIn(
@@ -516,11 +594,7 @@ export async function firebaseResetPassword(
   }
 
   try {
-    await sendPasswordResetEmail(
-      auth,
-      normalizedEmail,
-    );
-
+    await sendPasswordResetEmail(auth, normalizedEmail);
     return { error: null };
   } catch {
     return {
@@ -538,4 +612,3 @@ export async function firebaseSignOut(): Promise<void> {
 export function getCurrentUser(): User | null {
   return auth?.currentUser ?? null;
 }
-
