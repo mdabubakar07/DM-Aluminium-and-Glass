@@ -174,7 +174,8 @@ export async function saveCustomerLead(payload: {
     }
   }
 
-  return { persisted: false };
+  markPendingOperation(entry.id, 'create');
+return { persisted: false };
 }
 
 export async function fetchCustomerLeads(): Promise<SubmissionRecord[]> {
@@ -519,35 +520,50 @@ export async function purgeOldDeletedCustomerLeads(
         );
       });
 
-      let removedCount = 0;
+let removedCount = 0;
+let failedCount = 0;
 
-      for (const docSnap of expired) {
-        try {
-          await withFirebaseTimeout(
-            deleteDoc(doc(db, 'contact_submissions', docSnap.id)),
-          );
-          removeFromLocalSubmissions(docSnap.id);
-          removedCount++;
-        } catch {
-          // Skip this record — leave in Firestore and local for next retry
-        }
-      }
+for (const docSnap of expired) {
+  try {
+    await withFirebaseTimeout(
+      deleteDoc(doc(db, 'contact_submissions', docSnap.id)),
+    );
+    removeFromLocalSubmissions(docSnap.id);
+    removedCount++;
+  } catch {
+    failedCount++;
+    markPendingOperation(docSnap.id, 'permanent_delete');
+  }
+}
 
-      return { removed: removedCount, persisted: true };
+return {
+  removed: removedCount,
+  persisted: failedCount === 0,
+};
     } catch {
       void 0;
     }
   }
+const items = readLocalSubmissions();
 
-  const items = readLocalSubmissions();
-  const remaining = items.filter((item) => {
-    if (!item.deleted_at) return true;
-    return new Date(item.deleted_at).getTime() > cutoff;
-  });
-  const removed = items.length - remaining.length;
-  writeLocalSubmissions(remaining);
+const updated = items.map((item) => {
+  if (
+    item.deleted_at &&
+    new Date(item.deleted_at).getTime() <= cutoff
+  ) {
+    return {
+      ...item,
+      _pending_sync: true,
+      _pending_operation: 'permanent_delete' as PendingOperation,
+    };
+  }
 
-  return { removed, persisted: false };
+  return item;
+});
+
+writeLocalSubmissions(updated);
+
+return { removed: 0, persisted: false };
 }
 
 export async function syncPendingOperations(): Promise<{ synced: number; remaining: number }> {
