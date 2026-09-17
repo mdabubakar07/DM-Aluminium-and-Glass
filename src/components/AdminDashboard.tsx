@@ -415,9 +415,9 @@ export default function AdminDashboard() {
         ? submissions
         : submissions.filter((submission) => submission.status !== 'completed');
 
-  const workSubmissions = allSubmissions.filter((s) =>
-    ['new', 'accepted', 'on_hold'].includes(s.status),
-  );
+ const workSubmissions = allSubmissions.filter(
+  (submission) => submission.status !== 'rejected',
+);
 
   const resetCalculator = () => {
     setCalculatorDisplay('0');
@@ -1140,14 +1140,42 @@ export default function AdminDashboard() {
           {activeSection === 'work' && (
             <>
               <div className="mb-6 rounded-xl border border-ice-400/20 bg-ice-500/5 p-5">
-                <div className="flex items-center gap-3">
-                  <Briefcase size={20} className="text-ice-300" />
-                  <div>
-                    <h2 className="text-lg font-semibold text-white">Active Work Management</h2>
-                    <p className="mt-1 text-sm text-aluminum-400">New, accepted, and on-hold enquiries requiring attention. Update statuses as work progresses.</p>
-                  </div>
-                </div>
-              </div>
+  <div className="flex items-start gap-3">
+    <Briefcase size={20} className="mt-0.5 text-ice-300" />
+    <div>
+      <h2 className="text-lg font-semibold text-white">Work Specialist</h2>
+      <p className="mt-1 text-sm leading-relaxed text-aluminum-400">
+        Manage customer work from new enquiry through completion. Review project
+        details, update progress, handle pending work, and keep completed work
+        properly recorded.
+      </p>
+    </div>
+  </div>
+
+  <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div className="rounded-lg border border-white/5 bg-charcoal-900/60 p-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-aluminum-500">New</p>
+      <p className="mt-1 text-xl font-bold text-ice-300">{counts.new ?? 0}</p>
+    </div>
+
+    <div className="rounded-lg border border-white/5 bg-charcoal-900/60 p-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-aluminum-500">In Progress</p>
+      <p className="mt-1 text-xl font-bold text-green-400">
+        {(counts.accepted ?? 0) + (counts.on_hold ?? 0)}
+      </p>
+    </div>
+
+    <div className="rounded-lg border border-white/5 bg-charcoal-900/60 p-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-aluminum-500">Completed</p>
+      <p className="mt-1 text-xl font-bold text-aluminum-200">{counts.completed ?? 0}</p>
+    </div>
+
+    <div className="rounded-lg border border-white/5 bg-charcoal-900/60 p-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-aluminum-500">Total Work</p>
+      <p className="mt-1 text-xl font-bold text-white">{workSubmissions.length}</p>
+    </div>
+  </div>
+</div>
 
               {renderStatusBar()}
 
