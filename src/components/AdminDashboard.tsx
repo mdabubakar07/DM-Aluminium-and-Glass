@@ -10,6 +10,7 @@ import {
   deleteCustomerLead,
   fetchDeletedCustomerLeads,
   fetchCustomerLeads,
+  getPendingCount,
   hasPendingOperations,
   permanentlyDeleteCustomerLead,
   purgeOldDeletedCustomerLeads,
@@ -132,7 +133,7 @@ export default function AdminDashboard() {
   }, [fetchSubmissions]);
 
   useEffect(() => {
-    setPendingCount(hasPendingOperations() ? 1 : 0);
+    setPendingCount(getPendingCount());
 
     const trySync = async () => {
       if (!hasPendingOperations()) return;
@@ -202,7 +203,7 @@ export default function AdminDashboard() {
       if (persisted) {
         setSuccessMessage('Task status updated successfully.');
       } else {
-        setPendingCount(1);
+        setPendingCount(getPendingCount());
         setSuccessMessage('Status saved locally. Will sync to Firestore when connection returns.');
       }
     } catch {
@@ -228,7 +229,7 @@ export default function AdminDashboard() {
       if (persisted) {
         setSuccessMessage('Payment status updated successfully.');
       } else {
-        setPendingCount(1);
+        setPendingCount(getPendingCount());
         setSuccessMessage('Payment status saved locally. Will sync to Firestore when connection returns.');
       }
     } catch {
@@ -280,7 +281,7 @@ export default function AdminDashboard() {
       if (persisted) {
         setSuccessMessage('Customer task updated successfully.');
       } else {
-        setPendingCount(1);
+        setPendingCount(getPendingCount());
         setSuccessMessage('Edit saved locally. Will sync to Firestore when connection returns.');
       }
     } catch {
@@ -300,7 +301,7 @@ export default function AdminDashboard() {
       if (persisted) {
         setSuccessMessage('Customer enquiry deleted.');
       } else {
-        setPendingCount(1);
+        setPendingCount(getPendingCount());
         setSuccessMessage('Delete saved locally. Will sync to Firestore when connection returns.');
       }
     } catch {
@@ -309,17 +310,29 @@ export default function AdminDashboard() {
     setUpdatingId(null);
   };
 
-  const restoreSubmission = async (submission: Submission) => {
+ const restoreSubmission = async (submission: Submission) => {
+  setUpdatingId(submission.id);
+
+  try {
     const { persisted } = await restoreCustomerLead(submission.id);
+
     setRecycleBin((prev) => prev.filter((item) => item.id !== submission.id));
     await fetchSubmissions();
+
     if (persisted) {
       setSuccessMessage(`${submission.name} restored from the recycle bin.`);
     } else {
-      setPendingCount(1);
-      setSuccessMessage(`${submission.name} restored locally. Will sync to Firestore when connection returns.`);
+      setPendingCount(getPendingCount());
+      setSuccessMessage(
+        `${submission.name} restored locally. Will sync to Firestore when connection returns.`,
+      );
     }
-  };
+  } catch {
+    setError('Unable to restore customer enquiry.');
+  } finally {
+    setUpdatingId(null);
+  }
+};
 
   const permanentlyDeleteSubmission = async (submission: Submission) => {
     if (!window.confirm(`Permanently delete ${submission.name}? This cannot be undone.`)) return;
@@ -328,7 +341,7 @@ export default function AdminDashboard() {
     if (persisted) {
       setSuccessMessage(`${submission.name} permanently deleted.`);
     } else {
-      setPendingCount(1);
+      setPendingCount(getPendingCount());
       setSuccessMessage(`${submission.name} removed locally. Will sync to Firestore when connection returns.`);
     }
   };
@@ -340,7 +353,7 @@ export default function AdminDashboard() {
       if (persisted) {
         setSuccessMessage(`${removed} old deleted record(s) were removed from storage. ${days}-day retention applied.`);
       } else {
-        setPendingCount(1);
+        setPendingCount(getPendingCount());
         setSuccessMessage(`${removed} record(s) removed locally. Will sync to Firestore when connection returns.`);
       }
     } catch {
@@ -496,10 +509,26 @@ export default function AdminDashboard() {
       }
     }
 
-    if (lastDay !== todayKey) {
-      const archived = JSON.parse(savedCurrent || '[]') as DiaryEntry[];
-      if (archived.length > 0) {
-        const mergedBook = [...archived, ...((savedBook ? JSON.parse(savedBook) : []) as DiaryEntry[])];
+   if (lastDay !== todayKey) {
+  let archived: DiaryEntry[] = [];
+  let existingBook: DiaryEntry[] = [];
+
+  try {
+    const parsedArchived = savedCurrent ? JSON.parse(savedCurrent) : [];
+    archived = Array.isArray(parsedArchived) ? parsedArchived : [];
+  } catch {
+    localStorage.removeItem(CURRENT_DIARY_KEY);
+  }
+
+  try {
+    const parsedBook = savedBook ? JSON.parse(savedBook) : [];
+    existingBook = Array.isArray(parsedBook) ? parsedBook : [];
+  } catch {
+    localStorage.removeItem(DAILY_BOOK_KEY);
+  }
+
+  if (archived.length > 0) {
+    const mergedBook = [...archived, ...existingBook];
         setDailyBook(mergedBook);
         localStorage.setItem(DAILY_BOOK_KEY, JSON.stringify(mergedBook));
         setDiaryEntries([]);
