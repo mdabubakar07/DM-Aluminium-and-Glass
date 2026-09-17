@@ -13,7 +13,7 @@ type AuthContextValue = {
   user: User | null;
   isAdmin: boolean;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  signIn: (email: string, password: string, persist?: boolean) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: string | null }>;
 };
@@ -43,8 +43,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
-  async function signIn(email: string, password: string) {
-    const { error } = await firebaseSignIn(email, password);
+  async function signIn(email: string, password: string, persist: boolean = true) {
+    const { error } = await firebaseSignIn(email, password, persist);
 
     if (error) {
       setIsAdmin(false);

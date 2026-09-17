@@ -3,6 +3,9 @@ import {
   getAuth,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
+  setPersistence,
+  browserLocalPersistence,
+  browserSessionPersistence,
   signOut as firebaseAuthSignOut,
   type User,
 } from 'firebase/auth';
@@ -18,6 +21,15 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 
+export type PendingOperation =
+  | 'create'
+  | 'update_details'
+  | 'update_status'
+  | 'update_payment'
+  | 'soft_delete'
+  | 'restore'
+  | 'permanent_delete';
+
 export type SubmissionRecord = {
   id: string;
   name: string;
@@ -32,6 +44,7 @@ export type SubmissionRecord = {
   created_at: string;
   updated_at?: string;
   _pending_sync?: boolean;
+  _pending_operation?: PendingOperation;
 };
 
 export type MutationResult = { persisted: boolean };
@@ -82,9 +95,14 @@ function writeLocalSubmissions(items: SubmissionRecord[]) {
   localStorage.setItem(LOCAL_SUBMISSIONS_KEY, JSON.stringify(items));
 }
 
+function removeFromLocalSubmissions(id: string) {
+  const items = readLocalSubmissions();
+  writeLocalSubmissions(items.filter((item) => item.id !== id));
+}
+
 function withFirebaseTimeout<T>(
   request: Promise<T>,
-  timeoutMs = 1200,
+  timeoutMs = 6000,
 ): Promise<T> {
   return Promise.race([
     request,
@@ -97,13 +115,33 @@ function withFirebaseTimeout<T>(
   ]);
 }
 
+function markPendingOperation(id: string, operation: PendingOperation) {
+  const items = readLocalSubmissions();
+  const updated = items.map((item) =>
+    item.id === id
+      ? { ...item, _pending_sync: true, _pending_operation: operation }
+      : item,
+  );
+  writeLocalSubmissions(updated);
+}
+
+function clearPendingFlag(id: string) {
+  const items = readLocalSubmissions();
+  const updated = items.map((item) =>
+    item.id === id
+      ? { ...item, _pending_sync: undefined, _pending_operation: undefined }
+      : item,
+  );
+  writeLocalSubmissions(updated);
+}
+
 export async function saveCustomerLead(payload: {
   name: string;
   email: string;
   phone: string;
   projectType: string;
   message: string;
-}) {
+}): Promise<MutationResult> {
   const createdAt = new Date().toISOString();
 
   const entry: SubmissionRecord = {
@@ -129,16 +167,14 @@ export async function saveCustomerLead(payload: {
       await withFirebaseTimeout(
         setDoc(doc(db, 'contact_submissions', entry.id), entry),
       );
+      return { persisted: true };
     } catch {
-      const local = readLocalSubmissions();
-      const marked = local.map((item) =>
-        item.id === entry.id ? { ...item, _pending_sync: true } : item,
-      );
-      writeLocalSubmissions(marked);
+      markPendingOperation(entry.id, 'create');
+      return { persisted: false };
     }
   }
 
-  return entry;
+  return { persisted: false };
 }
 
 export async function fetchCustomerLeads(): Promise<SubmissionRecord[]> {
@@ -155,14 +191,10 @@ export async function fetchCustomerLeads(): Promise<SubmissionRecord[]> {
         .map((docSnap) => ({
           id: docSnap.id,
           ...docSnap.data(),
-        }))
-        .filter(
-          (item) => !(item as SubmissionRecord).deleted_at,
-        ) as SubmissionRecord[];
+        })) as SubmissionRecord[];
 
-      mergePendingLocalIntoRemote(remote);
-
-      return remote;
+      const merged = mergePendingLocalIntoRemote(remote);
+      return merged.filter((item) => !item.deleted_at);
     } catch {
       return readLocalSubmissions().filter(
         (item) => !item.deleted_at,
@@ -179,6 +211,14 @@ export async function fetchDeletedCustomerLeads(): Promise<SubmissionRecord[]> {
   const now = Date.now();
   const recycleLimit = 30 * 24 * 60 * 60 * 1000;
 
+  const localPendingDeleted = readLocalSubmissions().filter((item) => {
+    const deletedAt = item.deleted_at;
+    return (
+      deletedAt &&
+      now - new Date(deletedAt).getTime() <= recycleLimit
+    );
+  });
+
   if (db) {
     try {
       const q = query(
@@ -188,39 +228,42 @@ export async function fetchDeletedCustomerLeads(): Promise<SubmissionRecord[]> {
 
       const snapshot = await withFirebaseTimeout(getDocs(q));
 
-      return snapshot.docs
+      const pendingRestoreIds = new Set(
+        readLocalSubmissions()
+          .filter(
+            (item) =>
+              item._pending_sync && item._pending_operation === 'restore',
+          )
+          .map((item) => item.id),
+      );
+
+      const remote = snapshot.docs
         .map((docSnap) => ({
           id: docSnap.id,
           ...docSnap.data(),
         }))
         .filter((item) => {
-          const deletedAt = (item as SubmissionRecord).deleted_at;
-
+          const record = item as SubmissionRecord;
+          const deletedAt = record.deleted_at;
           return (
             deletedAt &&
+            !pendingRestoreIds.has(record.id) &&
             now - new Date(deletedAt).getTime() <= recycleLimit
           );
         }) as SubmissionRecord[];
-    } catch {
-      return readLocalSubmissions().filter((item) => {
-        const deletedAt = item.deleted_at;
 
-        return (
-          deletedAt &&
-          now - new Date(deletedAt).getTime() <= recycleLimit
-        );
-      });
+      const remoteIds = new Set(remote.map((r) => r.id));
+      const localOnly = localPendingDeleted.filter(
+        (item) => !remoteIds.has(item.id),
+      );
+
+      return [...localOnly, ...remote];
+    } catch {
+      return localPendingDeleted;
     }
   }
 
-  return readLocalSubmissions().filter((item) => {
-    const deletedAt = item.deleted_at;
-
-    return (
-      deletedAt &&
-      now - new Date(deletedAt).getTime() <= recycleLimit
-    );
-  });
+  return localPendingDeleted;
 }
 
 export async function updateCustomerLeadStatus(
@@ -255,6 +298,7 @@ export async function updateCustomerLeadStatus(
           updated_at: updatedAt,
           notification_status: 'sent',
           _pending_sync: true,
+          _pending_operation: 'update_status' as PendingOperation,
         }
       : item,
   );
@@ -293,6 +337,7 @@ export async function updateCustomerLeadPaymentStatus(
           payment_status: paymentStatus,
           updated_at: updatedAt,
           _pending_sync: true,
+          _pending_operation: 'update_payment' as PendingOperation,
         }
       : item,
   );
@@ -332,7 +377,13 @@ export async function updateCustomerLeadDetails(
   const items = readLocalSubmissions();
   const updated = items.map((item) =>
     item.id === id
-      ? { ...item, ...details, updated_at: updatedAt, _pending_sync: true }
+      ? {
+          ...item,
+          ...details,
+          updated_at: updatedAt,
+          _pending_sync: true,
+          _pending_operation: 'update_details' as PendingOperation,
+        }
       : item,
   );
   writeLocalSubmissions(updated);
@@ -365,7 +416,13 @@ export async function deleteCustomerLead(id: string): Promise<MutationResult> {
   const items = readLocalSubmissions();
   const updated = items.map((item) =>
     item.id === id
-      ? { ...item, deleted_at: deletedAt, updated_at: deletedAt, _pending_sync: true }
+      ? {
+          ...item,
+          deleted_at: deletedAt,
+          updated_at: deletedAt,
+          _pending_sync: true,
+          _pending_operation: 'soft_delete' as PendingOperation,
+        }
       : item,
   );
   writeLocalSubmissions(updated);
@@ -398,7 +455,13 @@ export async function restoreCustomerLead(id: string): Promise<MutationResult> {
   const items = readLocalSubmissions();
   const updated = items.map((item) =>
     item.id === id
-      ? { ...item, deleted_at: undefined, updated_at: updatedAt, _pending_sync: true }
+      ? {
+          ...item,
+          deleted_at: undefined,
+          updated_at: updatedAt,
+          _pending_sync: true,
+          _pending_operation: 'restore' as PendingOperation,
+        }
       : item,
   );
   writeLocalSubmissions(updated);
@@ -413,7 +476,7 @@ export async function permanentlyDeleteCustomerLead(id: string): Promise<Mutatio
         deleteDoc(doc(db, 'contact_submissions', id)),
       );
 
-      clearPendingFlag(id);
+      removeFromLocalSubmissions(id);
       return { persisted: true };
     } catch {
       void 0;
@@ -421,7 +484,16 @@ export async function permanentlyDeleteCustomerLead(id: string): Promise<Mutatio
   }
 
   const items = readLocalSubmissions();
-  writeLocalSubmissions(items.filter((item) => item.id !== id));
+  const updated = items.map((item) =>
+    item.id === id
+      ? {
+          ...item,
+          _pending_sync: true,
+          _pending_operation: 'permanent_delete' as PendingOperation,
+        }
+      : item,
+  );
+  writeLocalSubmissions(updated);
 
   return { persisted: false };
 }
@@ -447,15 +519,21 @@ export async function purgeOldDeletedCustomerLeads(
         );
       });
 
-      await Promise.all(
-        expired.map((docSnap) =>
-          withFirebaseTimeout(
-            deleteDoc(doc(db, 'contact_submissions', docSnap.id)),
-          ),
-        ),
-      );
+      let removedCount = 0;
 
-      return { removed: expired.length, persisted: true };
+      for (const docSnap of expired) {
+        try {
+          await withFirebaseTimeout(
+            deleteDoc(doc(db, 'contact_submissions', docSnap.id)),
+          );
+          removeFromLocalSubmissions(docSnap.id);
+          removedCount++;
+        } catch {
+          // Skip this record — leave in Firestore and local for next retry
+        }
+      }
+
+      return { removed: removedCount, persisted: true };
     } catch {
       void 0;
     }
@@ -473,86 +551,153 @@ export async function purgeOldDeletedCustomerLeads(
 }
 
 export async function syncPendingOperations(): Promise<{ synced: number; remaining: number }> {
-  if (!db) return { synced: 0, remaining: 0 };
+  if (!db) return { synced: 0, remaining: getPendingCount() };
 
   const items = readLocalSubmissions();
-  const pending = items.filter((item) => item._pending_sync);
+  const pending = items.filter(
+    (item) => item._pending_sync && item._pending_operation,
+  );
 
   if (pending.length === 0) return { synced: 0, remaining: 0 };
 
   let synced = 0;
 
   for (const item of pending) {
+    const operation = item._pending_operation!;
+
     try {
-      const { _pending_sync, ...cleanRecord } = item;
-      void _pending_sync;
-
-      if (item.deleted_at === undefined && !items.find((x) => x.id === item.id && x.deleted_at)) {
-        const localCheck = readLocalSubmissions();
-        const stillExists = localCheck.find((x) => x.id === item.id);
-        if (!stillExists || stillExists.deleted_at) continue;
-
-        await withFirebaseTimeout(
-          setDoc(doc(db, 'contact_submissions', item.id), cleanRecord),
-        );
-      } else if (item.deleted_at) {
-        await withFirebaseTimeout(
-          updateDoc(doc(db, 'contact_submissions', item.id), {
-            deleted_at: item.deleted_at,
-            updated_at: item.updated_at ?? new Date().toISOString(),
-          }),
-        );
-      } else {
-        await withFirebaseTimeout(
-          setDoc(doc(db, 'contact_submissions', item.id), cleanRecord, { merge: true }),
-        );
+      switch (operation) {
+        case 'create': {
+          const {
+            _pending_sync: _ps,
+            _pending_operation: _po,
+            deleted_at: _da,
+            ...writeRecord
+          } = item;
+          void _ps;
+          void _po;
+          void _da;
+          await withFirebaseTimeout(
+            setDoc(doc(db, 'contact_submissions', item.id), writeRecord),
+          );
+          break;
+        }
+        case 'update_details': {
+          await withFirebaseTimeout(
+            updateDoc(doc(db, 'contact_submissions', item.id), {
+              name: item.name,
+              email: item.email,
+              phone: item.phone,
+              project_type: item.project_type,
+              message: item.message,
+              updated_at: item.updated_at ?? new Date().toISOString(),
+            }),
+          );
+          break;
+        }
+        case 'update_status': {
+          await withFirebaseTimeout(
+            updateDoc(doc(db, 'contact_submissions', item.id), {
+              status: item.status,
+              updated_at: item.updated_at ?? new Date().toISOString(),
+              notification_status: 'sent',
+            }),
+          );
+          break;
+        }
+        case 'update_payment': {
+          await withFirebaseTimeout(
+            updateDoc(doc(db, 'contact_submissions', item.id), {
+              payment_status: item.payment_status ?? 'pending',
+              updated_at: item.updated_at ?? new Date().toISOString(),
+            }),
+          );
+          break;
+        }
+        case 'soft_delete': {
+          await withFirebaseTimeout(
+            updateDoc(doc(db, 'contact_submissions', item.id), {
+              deleted_at: item.deleted_at ?? new Date().toISOString(),
+              updated_at: item.updated_at ?? new Date().toISOString(),
+            }),
+          );
+          break;
+        }
+        case 'restore': {
+          await withFirebaseTimeout(
+            updateDoc(doc(db, 'contact_submissions', item.id), {
+              deleted_at: null,
+              updated_at: item.updated_at ?? new Date().toISOString(),
+            }),
+          );
+          break;
+        }
+        case 'permanent_delete': {
+          await withFirebaseTimeout(
+            deleteDoc(doc(db, 'contact_submissions', item.id)),
+          );
+          removeFromLocalSubmissions(item.id);
+          break;
+        }
+        default:
+          break;
       }
 
-      clearPendingFlag(item.id);
+      if (operation !== 'permanent_delete') {
+        clearPendingFlag(item.id);
+      }
       synced++;
     } catch {
-      void 0;
+      // Leave pending for next retry cycle
     }
   }
 
-  const remaining = readLocalSubmissions().filter((item) => item._pending_sync).length;
+  const remaining = getPendingCount();
 
   return { synced, remaining };
 }
 
-export function hasPendingOperations(): boolean {
-  return readLocalSubmissions().some((item) => item._pending_sync);
+export function hasPendingOperations(): number {
+  return readLocalSubmissions().filter((item) => item._pending_sync).length;
 }
 
-function clearPendingFlag(id: string) {
-  const items = readLocalSubmissions();
-  const updated = items.map((item) =>
-    item.id === id
-      ? { ...item, _pending_sync: undefined }
-      : item,
+export function getPendingCount(): number {
+  return readLocalSubmissions().filter((item) => item._pending_sync).length;
+}
+
+export function getPendingRecordIds(): Set<string> {
+  return new Set(
+    readLocalSubmissions()
+      .filter((item) => item._pending_sync)
+      .map((item) => item.id),
   );
-  writeLocalSubmissions(updated);
 }
 
-function mergePendingLocalIntoRemote(remote: SubmissionRecord[]): void {
+function mergePendingLocalIntoRemote(remote: SubmissionRecord[]): SubmissionRecord[] {
   const local = readLocalSubmissions();
   const pending = local.filter((item) => item._pending_sync);
 
-  if (pending.length === 0) return;
+  if (pending.length === 0) return remote;
 
-  for (const pendingItem of pending) {
-    const remoteIndex = remote.findIndex((r) => r.id === pendingItem.id);
-    if (remoteIndex >= 0) {
-      remote[remoteIndex] = { ...remote[remoteIndex], ...pendingItem };
-    } else if (!pendingItem.deleted_at) {
-      remote.unshift(pendingItem);
-    }
-  }
+  const pendingMap = new Map(pending.map((p) => [p.id, p]));
+
+  const merged = remote.map((r) => {
+    const pendingItem = pendingMap.get(r.id);
+    return pendingItem ? { ...r, ...pendingItem } : r;
+  });
+
+  const remoteIds = new Set(remote.map((r) => r.id));
+  const notInRemote = pending.filter(
+    (p) => !remoteIds.has(p.id) && !p.deleted_at,
+  );
+
+  return [...notInRemote, ...merged];
 }
 
 export async function firebaseSignIn(
   email: string,
   password: string,
+  persist: boolean = true,
 ) {
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -563,6 +708,11 @@ export async function firebaseSignIn(
   }
 
   try {
+    await setPersistence(
+      auth,
+      persist ? browserLocalPersistence : browserSessionPersistence,
+    );
+
     const credential = await signInWithEmailAndPassword(
       auth,
       normalizedEmail,
