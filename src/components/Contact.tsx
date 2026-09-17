@@ -80,20 +80,27 @@ export default function Contact() {
     }
 
     try {
-      await saveCustomerLead({
-        name: form.name,
-        email: form.email,
-        phone: form.phone,
-        projectType: form.projectType,
-        message: form.message,
-      });
+const result = await saveCustomerLead({
+  name: form.name,
+  email: form.email,
+  phone: form.phone,
+  projectType: form.projectType,
+  message: form.message,
+});
 
-      setStatus('success');
-      setForm(initialForm);
-    } catch {
-      setStatus('error');
-      setErrorMsg('Could not submit your request. Please try again or call us directly.');
-    }
+if (result.persisted) {
+  setStatus('success');
+  setForm(initialForm);
+} else {
+  setStatus('error');
+  setErrorMsg(
+    'Your request was saved temporarily and will sync automatically when the connection is restored.'
+  );
+}
+} catch {
+  setStatus('error');
+  setErrorMsg('Could not submit your request. Please try again or call us directly.');
+}
   };
 
   const inputClasses =
